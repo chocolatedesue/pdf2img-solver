@@ -4,11 +4,11 @@ from google import genai
 from PIL import Image
 import io
 import fitz
-from .config import GEMINI_API_KEY, MODEL_NAME, GEMINI_BASE_URL
-from .converter import get_client
-
 import time
 import random
+from .config import API_KEY, MODEL_NAME, BASE_URL
+from .converter import get_client
+from .schemas import PageSolving
 
 # Global semaphore to limit concurrency and avoid rate limits
 _semaphore = anyio.CapacityLimiter(5) 
@@ -17,21 +17,7 @@ async def solve_problems_on_page(image: Image.Image, page_num: int) -> str:
     """Uses Gemini to solve problems on a single page image with retries."""
     client = get_client()
         
-    prompt = f"""
-    You are an expert tutor and problem solver. Analyze this image which is page {page_num} of a document.
-
-    Tasks:
-    1. Identify all the problems/questions on this page.
-    2. For each problem, provide the following in order:
-       - **Problem Description**: Provide a COMPLETE textual alternative description of the problem (OCR and reconstruction). Ensure this is a faithful and full representation of the text and any visual information.
-       - **Solution Steps**: Provide a clear, step-by-step solution.
-       - **Final Answer**: Provide the final answer clearly.
-
-    Requirements:
-    - Language: Use the same language as the problems found in the image for your response.
-    - Format: Output in Markdown. Use LaTeX for mathematical formulas.
-    - If no problems are found, state "No problems found on this page." in the corresponding language.
-    """
+    prompt = f"Solve all problems on page {page_num}."
     
     async def call_gemini_with_retry():
         max_retries = 5
@@ -42,10 +28,24 @@ async def solve_problems_on_page(image: Image.Image, page_num: int) -> str:
                     def call_gemini():
                         response = client.models.generate_content(
                             model=MODEL_NAME,
-                            contents=[prompt, image]
+                            contents=[prompt, image],
+                            config={
+                                "response_mime_type": "application/json",
+                                "response_schema": PageSolving,
+                            }
                         )
-                        return response.text
-                    return await anyio.to_thread.run_sync(call_gemini)
+                        return response.parsed
+                    
+                    data = await anyio.to_thread.run_sync(call_gemini)
+                    
+                    if not data.solutions:
+                        return "No problems found."
+                    
+                    md_output = []
+                    for i, sol in enumerate(data.solutions):
+                        steps_text = "\n".join([f"{j+1}. {step.lstrip('0123456789. ')}" for j, step in enumerate(sol.solution_steps)])
+                        md_output.append(f"### Problem {i+1}\n\n**Description:**\n{sol.problem_description}\n\n**Steps:**\n{steps_text}\n\n**Final Answer:**\n{sol.final_answer}")
+                    return "\n\n".join(md_output)
             except Exception as e:
                 if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
                     if attempt == max_retries - 1:

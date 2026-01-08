@@ -5,21 +5,22 @@ import re
 from google import genai
 import fitz  # PyMuPDF
 from PIL import Image
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import io
-from .config import GEMINI_API_KEY, MODEL_NAME, GEMINI_BASE_URL
+from .config import API_KEY, MODEL_NAME, BASE_URL
+from .schemas import PageDigitization
 
 _client = None
 
 def setup_gemini():
     global _client
-    if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY is required for conversion.")
+    if not API_KEY:
+        raise ValueError("API_KEY is required for conversion.")
     
     # Configure client with custom base URL if provided
-    client_args = {"api_key": GEMINI_API_KEY}
-    if GEMINI_BASE_URL:
-        client_args["http_options"] = {"api_version": "v1alpha", "base_url": GEMINI_BASE_URL}
+    client_args = {"api_key": API_KEY}
+    if BASE_URL:
+        client_args["http_options"] = {"base_url": BASE_URL}
     
     _client = genai.Client(**client_args)
     return _client
@@ -51,51 +52,30 @@ async def describe_page_hybrid(image: Image.Image, doc_name: str, assets_dir_nam
         setup_gemini()
         
     prompt = f"""
-    You are a professional document digitizer. Analyze this page from '{doc_name}' and produce a high-fidelity Markdown version.
-
-    ### INSTRUCTIONS
-    1. LANGUAGE: Use the same language as the original document for all extracted text and image descriptions.
-    2. EXTRACT TEXT: Reconstruct all text, headers, and tables accurately. Use LaTeX for ALL mathematical formulas and expressions.
-    3. POSITION IMAGES: For diagrams/images, identifier its visual boundary and insert this tag: `![IMAGE_DESCRIPTION](./{assets_dir_name}/IMAGE_NAME)`
-       Place the tag EXACTLY where the image exists in the document flow.
-    4. NO DUPLICATION: Do not re-type the text that is already inside a diagram/image if you are tagging it as an image.
-    5. STRICT OUTPUT: Return ONLY the content between the tags. No conversational filler or extra explanations.
-
-    ### OUTPUT FORMAT
-    [MARKDOWN_CONTENT]
-    (Your Markdown text here)
-
-    [IMAGE_COORDINATES]
-    (A single JSON list of objects: {{"name": "IMAGE_NAME", "description": "...", "box_2d": [ymin, xmin, ymax, xmax]}})
+    Convert page from '{doc_name}' to Markdown.
+    1. Extract all text/tables. Use LaTeX for math.
+    2. Tag images as: `![desc](./{assets_dir_name}/name)` at their exact position.
+    3. Use the document's language.
     """
     
     def call_gemini():
         response = _client.models.generate_content(
             model=MODEL_NAME,
-            contents=[prompt, image]
+            contents=[prompt, image],
+            config={
+                "response_mime_type": "application/json",
+                "response_schema": PageDigitization,
+            }
         )
-        return response.text
+        return response.parsed
     
-    raw_response = await anyio.to_thread.run_sync(call_gemini)
-    
-    # Robust parsing
-    parts = raw_response.split("[IMAGE_COORDINATES]")
-    markdown_part = parts[0].replace("[MARKDOWN_CONTENT]", "").strip()
-    json_part = parts[1].strip() if len(parts) > 1 else "[]"
-    
-    # Cleanup markdown part
-    markdown = re.sub(r"^```markdown\s*|\s*```$", "", markdown_part, flags=re.MULTILINE).strip()
-    
-    # Cleanup JSON part
-    json_part = re.sub(r"^```json\s*|\s*```$", "", json_part, flags=re.MULTILINE).strip()
-    
-    coords = []
     try:
-        coords = json.loads(json_part)
+        data = await anyio.to_thread.run_sync(call_gemini)
+        return {"markdown": data.markdown, "coords": [img.model_dump() for img in data.images]}
     except Exception as e:
-        print(f"Failed to parse coordinates JSON: {e}")
-            
-    return {"markdown": markdown, "coords": coords}
+        print(f"Error parsing structured output: {e}")
+        # Fallback or re-raise
+        raise
 
 async def process_page(pdf_doc: fitz.Document, page_num: int, total_pages: int, temp_dir: str, assets_dir: str, results: Dict[int, str], doc_name: str):
     """Processes a single page: extract text, crop images, and save incrementally."""
