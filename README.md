@@ -1,33 +1,35 @@
 # pdf2md
 
-A Python tool to convert PDF files to Markdown using Gemini-3-flash-preview.
+A powerful tool to convert PDF files to Markdown or solve problems using Gemini.
 
-## Principles
-1. Convert PDF pages to images using `pdf2image`.
-2. Use Gemini-3-flash-preview Vision capabilities to describe each page in Markdown.
-3. Concatenate the output into a single Markdown file.
+## Features
 
-## Setup
+- **High-Fidelity Conversion**: Converts PDF pages to Markdown with accurate text, tables, and LaTeX formulas.
+- **Problem Solving**: Automatically identifies and solves problems/questions within the PDF.
+- **Structured Output**: Uses Gemini's structured output capabilities for reliable data extraction.
+- **Image Extraction**: Automatically identifies and crops images/diagrams from the PDF.
+- **Language Consistency**: Ensures responses match the original document's language.
 
-1. Install dependencies using `uv`:
+## Quick Start
+
+1. **Install dependencies**:
    ```bash
    uv sync
    ```
 
-2. Configure your API key:
-   - Copy `.env.example` to `.env`.
-   - Add your `GEMINI_API_KEY` to `.env`.
+2. **Configure environment**:
+   ```bash
+   cp .env.example .env
+   # Edit .env and add your API_KEY
+   ```
 
-## Usage
+3. **Run the tool**:
+   ```bash
+   # Convert PDF to Markdown
+   uv run python -m src.pdf2md.main input.pdf output.md
 
-Run the converter using `uv`:
+   # Solve problems in PDF
+   uv run python -m src.pdf2md.main input.pdf solutions.md --solve
+   ```
 
-```bash
-uv run python -m src.pdf2md.main input.pdf output.md
-```
-
-Or if you have the package installed in development mode:
-
-```bash
-uv run pdf2md input.pdf output.md
-```
+For detailed instructions, see [OPERATIONS.md](./OPERATIONS.md).

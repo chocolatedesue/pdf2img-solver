@@ -6,6 +6,13 @@ class ImageCoordinate(BaseModel):
     description: str
     box_2d: List[int]
 
+class MarkdownExtraction(BaseModel):
+    markdown: str
+
+class ImageCoordinatesExtraction(BaseModel):
+    images: List[ImageCoordinate]
+
+# Legacy combined schema (kept for reference)
 class PageDigitization(BaseModel):
     markdown: str
     images: List[ImageCoordinate]

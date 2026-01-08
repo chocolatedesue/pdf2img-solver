@@ -8,7 +8,7 @@ from PIL import Image
 from typing import List, Dict, Any, Optional
 import io
 from .config import API_KEY, MODEL_NAME, BASE_URL
-from .schemas import PageDigitization
+from .schemas import MarkdownExtraction, ImageCoordinatesExtraction
 
 _client = None
 
@@ -46,16 +46,16 @@ def pdf_to_images(pdf_path: str) -> List[Image.Image]:
         print(f"Error converting PDF to images: {e}")
         raise
 
-async def describe_page_hybrid(image: Image.Image, doc_name: str, assets_dir_name: str) -> Dict[str, Any]:
-    """Uses Gemini to extract text and image coordinates with precise flow positioning (Async)."""
+async def extract_markdown(image: Image.Image, doc_name: str, assets_dir_name: str) -> str:
+    """Extracts Markdown content from the page image."""
     if _client is None:
         setup_gemini()
         
     prompt = f"""
-    Convert page from '{doc_name}' to Markdown.
-    1. Extract all text/tables. Use LaTeX for math.
-    2. Tag images as: `![desc](./{assets_dir_name}/name)` at their exact position.
-    3. Use the document's language.
+    将'{doc_name}'的这一页转换为Markdown格式。
+    1. 提取所有文字和表格，数学公式用LaTeX表示。
+    2. 对于页面中的图像/图表，在其原始位置插入占位符: `![图像描述](./{assets_dir_name}/图像名称.png)`
+    3. 使用与原文档相同的语言，不要混用语言。
     """
     
     def call_gemini():
@@ -64,17 +64,49 @@ async def describe_page_hybrid(image: Image.Image, doc_name: str, assets_dir_nam
             contents=[prompt, image],
             config={
                 "response_mime_type": "application/json",
-                "response_schema": PageDigitization,
+                "response_schema": MarkdownExtraction,
             }
         )
         return response.parsed
     
+    data = await anyio.to_thread.run_sync(call_gemini)
+    return data.markdown
+
+async def extract_image_coordinates(image: Image.Image) -> List[Dict[str, Any]]:
+    """Extracts image/figure coordinates from the page."""
+    if _client is None:
+        setup_gemini()
+        
+    prompt = """
+    识别此页面中的所有图像、图表或图形。
+    对于每个图像，提供其名称、简短描述和边界框坐标 [ymin, xmin, ymax, xmax]（归一化到0-1000）。
+    如果没有图像，返回空列表。
+    """
+    
+    def call_gemini():
+        response = _client.models.generate_content(
+            model=MODEL_NAME,
+            contents=[prompt, image],
+            config={
+                "response_mime_type": "application/json",
+                "response_schema": ImageCoordinatesExtraction,
+            }
+        )
+        return response.parsed
+    
+    data = await anyio.to_thread.run_sync(call_gemini)
+    return [img.model_dump() for img in data.images]
+
+async def describe_page_hybrid(image: Image.Image, doc_name: str, assets_dir_name: str) -> Dict[str, Any]:
+    """Uses two separate calls to extract text and image coordinates."""
     try:
-        data = await anyio.to_thread.run_sync(call_gemini)
-        return {"markdown": data.markdown, "coords": [img.model_dump() for img in data.images]}
+        # Run extractions sequentially for stability
+        markdown = await extract_markdown(image, doc_name, assets_dir_name)
+        coords = await extract_image_coordinates(image)
+        
+        return {"markdown": markdown, "coords": coords}
     except Exception as e:
-        print(f"Error parsing structured output: {e}")
-        # Fallback or re-raise
+        print(f"Error in hybrid extraction: {e}")
         raise
 
 async def process_page(pdf_doc: fitz.Document, page_num: int, total_pages: int, temp_dir: str, assets_dir: str, results: Dict[int, str], doc_name: str):
@@ -99,6 +131,8 @@ async def process_page(pdf_doc: fitz.Document, page_num: int, total_pages: int, 
                 img_name = item.get("name")
                 if not img_name:
                     img_name = f"page_{page_num:03d}_img_{i+1:02d}.png"
+                elif not img_name.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    img_name = f"{img_name}.png"
                 
                 box = item.get("box_2d")
                 if not box or len(box) != 4: continue

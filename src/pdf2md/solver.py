@@ -17,7 +17,11 @@ async def solve_problems_on_page(image: Image.Image, page_num: int) -> str:
     """Uses Gemini to solve problems on a single page image with retries."""
     client = get_client()
         
-    prompt = f"Solve all problems on page {page_num}."
+    prompt = f"""
+    Solve all problems on page {page_num}. 
+    Use the same language as the problem description in the document for your response. 
+    Avoid mixing languages (e.g., don't mix Chinese and English) except for essential technical terms.
+    """
     
     async def call_gemini_with_retry():
         max_retries = 5
